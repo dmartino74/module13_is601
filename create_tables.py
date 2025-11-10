@@ -1,3 +1,9 @@
+import sys
+import os
+
+# Add app/operations to Python path so 'models' can be found
+sys.path.append(os.path.join(os.path.dirname(__file__), "app", "operations"))
+
 from models.calculation import Base
 from sqlalchemy import create_engine
 
