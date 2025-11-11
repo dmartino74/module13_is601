@@ -3,56 +3,102 @@ import subprocess
 import time
 import requests
 import os
+import signal
+import socket
 
-@pytest.fixture(scope='session')
+def _is_port_open(host: str, port: int, timeout: float = 0.5) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+@pytest.fixture(scope="session")
 def fastapi_server():
     """
-    Fixture to start the FastAPI server before E2E tests and stop it after tests complete.
+    Start or wait for a FastAPI server for E2E tests and stop it after the session.
+
+    Behavior:
+    - If a server is already listening on host:port, the fixture waits for an HTTP response
+      and yields without starting or stopping any process.
+    - Otherwise the fixture starts uvicorn (preferred) or falls back to `python -m app.main`,
+      waits for readiness, yields to tests, and then attempts a graceful shutdown of the
+      process it started.
     """
     env = os.environ.copy()
     env["PYTHONPATH"] = os.getcwd()
-    env["PORT"] = "8010"  # ✅ Use a clean port
 
-    print("🚀 Launching FastAPI server on port 8010...", flush=True)
+    host = "127.0.0.1"
+    port = 8000
+    env["PORT"] = str(port)
+    server_url = f"http://{host}:{port}/"
 
-    fastapi_process = subprocess.Popen(
-        ['python', '-m', 'app.main'],
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE
-    )
+    started_proc = None
 
-    server_url = 'http://127.0.0.1:8010/'
+    # If there's already a server listening on the port, wait until it answers HTTP
+    if _is_port_open(host, port):
+        timeout = 30
+        start = time.time()
+        while True:
+            try:
+                resp = requests.get(server_url, timeout=1)
+                if resp.status_code < 500:
+                    break
+            except requests.RequestException:
+                pass
+            if time.time() - start > timeout:
+                raise RuntimeError(f"Port {port} is open but server did not respond within timeout.")
+            time.sleep(0.5)
+        yield
+        return
+
+    # Try to start uvicorn; fallback to python -m app.main
+    cmd_uvicorn = ["uvicorn", "app.main:app", "--host", host, "--port", str(port)]
+    try:
+        proc = subprocess.Popen(cmd_uvicorn, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        cmd_used = cmd_uvicorn
+    except FileNotFoundError:
+        cmd_fallback = ["python", "-m", "app.main"]
+        proc = subprocess.Popen(cmd_fallback, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        cmd_used = cmd_fallback
+
+    started_proc = proc
+
+    # Wait for server readiness
     timeout = 30
-    start_time = time.time()
-    server_up = False
-
-    while time.time() - start_time < timeout:
+    start = time.time()
+    while True:
+        if proc.poll() is not None:
+            stdout, stderr = proc.communicate(timeout=1)
+            raise RuntimeError(
+                "FastAPI process exited prematurely.\n"
+                f"cmd: {' '.join(cmd_used)}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+            )
         try:
-            response = requests.get(server_url)
-            if response.status_code == 200:
-                server_up = True
-                print("✅ FastAPI server is up and running.", flush=True)
+            resp = requests.get(server_url, timeout=1)
+            if resp.status_code < 500:
                 break
-        except requests.exceptions.ConnectionError:
+        except requests.RequestException:
             pass
-        time.sleep(1)
-
-    if not server_up:
-        try:
-            stdout, stderr = fastapi_process.communicate(timeout=1)
-            print("❌ FastAPI server failed to start.", flush=True)
-            print("📤 Server stdout:\n", stdout.decode(errors="ignore"), flush=True)
-            print("📥 Server stderr:\n", stderr.decode(errors="ignore"), flush=True)
-        except Exception as e:
-            print("⚠️ Failed to capture server logs:", str(e), flush=True)
-        finally:
-            fastapi_process.terminate()
-        raise RuntimeError("FastAPI server failed to start within timeout period.")
+        if time.time() - start > timeout:
+            try:
+                stdout, stderr = proc.communicate(timeout=1)
+            except Exception:
+                stdout = stderr = "<unable to capture>"
+            proc.terminate()
+            raise RuntimeError(
+                "Timed out waiting for FastAPI to start.\n"
+                f"cmd: {' '.join(cmd_used)}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+            )
+        time.sleep(0.5)
 
     yield
 
-    print("🛑 Shutting down FastAPI server...", flush=True)
-    fastapi_process.terminate()
-    fastapi_process.wait()
-    print("✅ FastAPI server has been terminated.", flush=True)
+    # Teardown: only stop the process we started
+    if started_proc is not None:
+        try:
+            started_proc.send_signal(signal.SIGINT)
+            started_proc.wait(timeout=5)
+        except Exception:
+            started_proc.terminate()
+            started_proc.wait(timeout=5)
