@@ -28,6 +28,7 @@ def get_operation(op_type: str) -> Operation:
     operations = {
         "Add": AddOperation(),
         "Sub": SubOperation(),
+        "Subtract": SubOperation(),  # ✅ Alias added
         "Multiply": MultiplyOperation(),
         "Divide": DivideOperation()
     }
