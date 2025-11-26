@@ -104,7 +104,7 @@ jobs:   # 👈 this was missing
         uses: docker/setup-buildx-action@v3
 
       - name: Build Docker image (pull latest base)
-        run: docker build --pull -t dmartino74/module12_is601:test .
+        run: docker build --pull -t dmartino74/module13_is601:test .
 
       - name: Install Trivy
         run: |
@@ -117,8 +117,8 @@ jobs:   # 👈 this was missing
 
       - name: Run Trivy scan (informational only)
         run: |
-          trivy image --format table --exit-code 0 --ignore-unfixed dmartino74/module12_is601:test || true
-          trivy image --format json --output trivy_full.json --ignore-unfixed dmartino74/module12_is601:test || true
+          trivy image --format table --exit-code 0 --ignore-unfixed dmartino74/module13_is601:test || true
+          trivy image --format json --output trivy_full.json --ignore-unfixed dmartino74/module13_is601:test || true
           echo "Trivy scan completed (informational)."
 
       - name: Upload Trivy report artifact
@@ -151,9 +151,9 @@ jobs:   # 👈 this was missing
         with:
           push: true
           tags: |
-            dmartino74/module12_is601:latest
-            dmartino74/module12_is601:${{ github.sha }}
+            dmartino74/module13_is601:latest
+            dmartino74/module13_is601:${{ github.sha }}
           platforms: linux/amd64,linux/arm64
-          cache-from: type=registry,ref=dmartino74/module12_is601:cache
+          cache-from: type=registry,ref=dmartino74/module13_is601:cache
           cache-to: type=inline,mode=max
 
